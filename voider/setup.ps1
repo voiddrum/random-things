@@ -116,10 +116,14 @@ if (-not $python) {
     exit 1
 }
 
+$venvPy = Join-Path $script:RepoRoot ".venv\Scripts\python.exe"
+if ((Test-Path ".venv") -and -not (Test-Path $venvPy)) {
+    Write-Warn2 "Existing .venv has no Windows interpreter — looks like a Linux/WSL venv. Recreating."
+    Remove-Item -Recurse -Force ".venv"
+}
 if (-not (Test-Path ".venv")) {
     & $python.Source -m venv .venv
 }
-$venvPy = Join-Path $script:RepoRoot ".venv\Scripts\python.exe"
 & $venvPy -m pip install --upgrade pip
 & $venvPy -m pip install -r requirements.txt
 Write-Ok "Dependencies installed."
