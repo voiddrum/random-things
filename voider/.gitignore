@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local config / state — never commit
+config.local.json
+.voider/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
