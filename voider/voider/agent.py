@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from voider.llm import LLMResponse, OllamaClient
 from voider.permissions import Decision, PermissionLedger
 from voider.tools.base import Tool, ToolResult
+
+log = logging.getLogger("voider.agent")
+
+
+def _short(s: Any, n: int = 120) -> str:
+    s = str(s).replace("\n", " ")
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 SYSTEM_PROMPT = """You are voider, a local assistant running on the user's machine.
@@ -47,8 +56,11 @@ class Agent:
             history = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
 
         history.append({"role": "user", "content": user_message})
+        turn_t0 = time.monotonic()
+        log.info("turn start | user=%r", _short(user_message, 100))
 
-        for _ in range(self.max_turns):
+        for turn_idx in range(self.max_turns):
+            log.info("loop %d/%d | history=%d msgs", turn_idx + 1, self.max_turns, len(history))
             resp: LLMResponse = await self.llm.chat(history, tools=self._tool_schemas)
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": resp.content}
@@ -63,11 +75,20 @@ class Agent:
                 await stream({"type": "assistant_text", "content": resp.content})
 
             if not resp.tool_calls:
+                log.info(
+                    "turn done | %.2fs total | content=%d chars",
+                    time.monotonic() - turn_t0,
+                    len(resp.content),
+                )
                 return history
+
+            log.info("plan: %d tool call(s) → %s",
+                     len(resp.tool_calls), [c.name for c in resp.tool_calls])
 
             for call in resp.tool_calls:
                 tool = self._tool_by_name.get(call.name)
                 if tool is None:
+                    log.warning("unknown tool requested: %s", call.name)
                     history.append(
                         {
                             "role": "tool",
@@ -80,6 +101,12 @@ class Agent:
 
                 target = tool.permission_target(call.arguments)
                 summary = tool.permission_summary(call.arguments)
+                log.info(
+                    "→ %s  target=%s  args=%s",
+                    call.name,
+                    target,
+                    _short(json.dumps(call.arguments, default=str), 200),
+                )
                 await stream(
                     {
                         "type": "tool_call",
@@ -99,13 +126,23 @@ class Agent:
                 )
 
                 if not allowed:
+                    log.info("✗ %s denied (%s)", call.name, decision)
                     msg = f"User denied this tool call ({decision})."
                     history.append({"role": "tool", "name": call.name, "content": msg})
                     await stream({"type": "tool_denied", "tool": call.name, "decision": decision})
                     continue
 
+                t0 = time.monotonic()
                 try:
                     result: ToolResult = await tool.run(call.arguments)
+                    dt = time.monotonic() - t0
+                    log.info(
+                        "← %s  ok=%s  %.2fs  content=%d chars",
+                        call.name,
+                        result.ok,
+                        dt,
+                        len(result.content),
+                    )
                     payload = result.content if result.ok else f"ERROR: {result.content}"
                     history.append({"role": "tool", "name": call.name, "content": payload})
                     await stream(
@@ -117,6 +154,8 @@ class Agent:
                         }
                     )
                 except Exception as exc:  # noqa: BLE001
+                    dt = time.monotonic() - t0
+                    log.exception("✗ %s raised after %.2fs", call.name, dt)
                     history.append(
                         {
                             "role": "tool",
@@ -126,6 +165,7 @@ class Agent:
                     )
                     await stream({"type": "tool_error", "tool": call.name, "error": repr(exc)})
 
+        log.warning("hit max_turns=%d, stopping", self.max_turns)
         history.append(
             {
                 "role": "assistant",

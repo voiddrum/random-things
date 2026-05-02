@@ -1,10 +1,14 @@
 """Thin Ollama chat client. Tool-calling shape matches Ollama's /api/chat."""
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+log = logging.getLogger("voider.llm")
 
 
 @dataclass
@@ -46,10 +50,26 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
 
-        r = await self._client.post(f"{self.base_url}/api/chat", json=payload)
-        r.raise_for_status()
+        last_role = messages[-1].get("role") if messages else "?"
+        log.info(
+            "chat → %s  msgs=%d  tools=%d  last=%s",
+            self.model,
+            len(messages),
+            len(tools) if tools else 0,
+            last_role,
+        )
+        t0 = time.monotonic()
+        try:
+            r = await self._client.post(f"{self.base_url}/api/chat", json=payload)
+            r.raise_for_status()
+        except Exception as exc:
+            log.error("chat ✗ failed after %.2fs: %r", time.monotonic() - t0, exc)
+            raise
+        dt = time.monotonic() - t0
+
         data = r.json()
         msg = data.get("message", {})
+        content = msg.get("content", "") or ""
         raw_calls = msg.get("tool_calls") or []
         calls = [
             ToolCall(
@@ -58,4 +78,16 @@ class OllamaClient:
             )
             for tc in raw_calls
         ]
-        return LLMResponse(content=msg.get("content", "") or "", tool_calls=calls)
+        log.info(
+            "chat ← %.2fs  content=%d chars  tool_calls=%s",
+            dt,
+            len(content),
+            [c.name for c in calls] or "[]",
+        )
+        eval_ms = (data.get("eval_count") or 0)
+        eval_dur = data.get("eval_duration") or 0
+        if eval_ms and eval_dur:
+            tps = eval_ms / (eval_dur / 1e9)
+            log.debug("ollama metrics: eval_count=%d eval_duration=%.2fs tok/s=%.1f",
+                      eval_ms, eval_dur / 1e9, tps)
+        return LLMResponse(content=content, tool_calls=calls)

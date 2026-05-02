@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
+
+log = logging.getLogger("voider.permissions")
 
 Decision = Literal["allow_once", "allow_always", "deny_once", "deny_always"]
 
@@ -98,8 +101,10 @@ class PermissionLedger:
     ) -> tuple[bool, Decision]:
         stored = self.stored_decision(tool, target)
         if stored == "allow_always":
+            log.info("auto-allow %s::%s (stored)", tool, target)
             return True, stored
         if stored == "deny_always":
+            log.info("auto-deny %s::%s (stored)", tool, target)
             return False, stored
 
         req = PermissionRequest(
@@ -109,6 +114,8 @@ class PermissionLedger:
             summary=summary,
             arguments=arguments,
         )
+        log.info("prompt %s::%s → user (waiting)", tool, target)
+        t0 = time.monotonic()
         decision = await prompt(
             {
                 "request_id": req.request_id,
@@ -118,5 +125,6 @@ class PermissionLedger:
                 "arguments": req.arguments,
             }
         )
+        log.info("decision %s::%s = %s  (%.1fs)", tool, target, decision, time.monotonic() - t0)
         await self.record(tool, target, decision)
         return decision in ("allow_once", "allow_always"), decision

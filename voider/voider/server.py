@@ -54,6 +54,20 @@ async def _startup() -> None:
     app.state.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
     app.state.reminder_task = asyncio.create_task(_reminder_loop(app))
 
+    log.info("voider ready  http://%s:%d", cfg.host, cfg.port)
+    log.info("model=%s  ollama=%s", cfg.model, cfg.ollama_url)
+    log.info("tools: %s", ", ".join(t.name for t in app.state.tools))
+    log.info("state dir: %s", cfg.permissions_path.parent)
+    try:
+        models = await app.state.llm.list_models()
+        if cfg.model not in models:
+            log.warning(
+                "configured model %r not in Ollama's installed list %s — first call will trigger a pull or fail",
+                cfg.model, models,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not reach Ollama at %s: %r", cfg.ollama_url, exc)
+
 
 async def _reminder_loop(app: FastAPI) -> None:
     store: ReminderStore = app.state.reminders
