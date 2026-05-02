@@ -174,6 +174,19 @@ fi
 if [[ ! -x ".venv/bin/python" ]]; then
     "$PY" -m venv .venv
 fi
+
+# Some Debian/Ubuntu images create a venv without pip bootstrapped (the
+# bundled pip wheel isn't always present). Detect and bootstrap via ensurepip.
+if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    warn "pip missing from venv — bootstrapping via ensurepip."
+    if ! .venv/bin/python -m ensurepip --upgrade --default-pip 2>/dev/null; then
+        err "Couldn't bootstrap pip. Install it and recreate the venv:"
+        err "  sudo apt install -y python3-venv python3-pip"
+        err "  rm -rf .venv && ./setup.sh"
+        exit 1
+    fi
+fi
+
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 ok "Dependencies installed (Linux wheels)."
